@@ -1,5 +1,6 @@
+flask
+asyncio
+websockets
+requests
 gspread
 oauth2client
-requests
-websockets
-asyncio
