@@ -6,6 +6,7 @@ import gspread
 import requests
 from flask import Flask
 from oauth2client.service_account import ServiceAccountCredentials
+from IPython.display import clear_output
 
 # Lấy thông tin từ Environment Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -58,6 +59,7 @@ async def check_positions(user_address):
                 if "channel" in data and data["channel"] == "subscriptionResponse":
                     continue
 
+                print(f"📩 Dữ liệu: {json.dumps(data)}")                    
                 current_positions = {}
                 if "data" in data and "clearinghouseState" in data["data"]:
                     asset_positions = data["data"]["clearinghouseState"].get("assetPositions", [])
@@ -113,6 +115,7 @@ async def main():
         user_addresses = [user["User_address"] for user in user_data]
         
         for user_address in user_addresses:
+            clear_output(wait=True)  # ✅ Xóa output để giữ giao diện sạch
             print(f"🔍 Kiểm tra vị thế: {user_address}")
             await check_positions(user_address)
             await asyncio.sleep(5)
