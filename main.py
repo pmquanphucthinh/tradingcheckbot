@@ -115,10 +115,10 @@ async def main():
         for user_address in user_addresses:
             print(f"🔍 Kiểm tra vị thế: {user_address}")
             await check_positions(user_address)
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
         
         print("🔄 Hoàn thành vòng kiểm tra, bắt đầu lại sau 10 giây...")
-        await asyncio.sleep(10)
+        await asyncio.sleep(6)
 
 # Chạy song song Flask và WebSocket
 def start_async_loop():
