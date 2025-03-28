@@ -1,23 +1,38 @@
+import os
 import asyncio
-import threading
 import websockets
 import json
 import gspread
 import requests
-import nest_asyncio
-from oauth2client.service_account import ServiceAccountCredentials
 from flask import Flask
+from oauth2client.service_account import ServiceAccountCredentials
 
-# Khởi tạo Flask app
+# Lấy thông tin từ Environment Variables
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+PORT = int(os.getenv("PORT", 10000))  # Mặc định PORT 10000 nếu không có biến môi trường
+
+# Kiểm tra xem các biến môi trường đã được thiết lập chưa
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or not GOOGLE_SHEET_URL or not GOOGLE_CREDENTIALS_JSON:
+    raise ValueError("❌ Thiếu Environment Variables cần thiết!")
+
+# Xử lý Google Credentials từ ENV
+creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+sheet = client.open_by_url(GOOGLE_SHEET_URL).sheet1
+
+# Flask server để tránh lỗi "No open ports detected"
 app = Flask(__name__)
 
-# Biến lưu logs
-log_data = []
+@app.route("/")
+def home():
+    return "Please contact quanphucthinh@gmail.com for more information"
 
-# Thông tin bot Telegram
-TELEGRAM_BOT_TOKEN = "1864590582:AAGSZFmEJzVkIHIThBsYk53iNatz5ChbLBk"
-TELEGRAM_CHAT_ID = "-1002606173012"
-
+# Hàm gửi tin nhắn Telegram
 def send_telegram_message(user_address, message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     reply_markup = json.dumps({
@@ -28,12 +43,7 @@ def send_telegram_message(user_address, message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML", "reply_markup": reply_markup}
     requests.post(url, json=payload)
 
-# Kết nối Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
-sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1-TMLLSpJdyeciON-wx8kRRcabBZaqXd3nsc0iRuGUAo/edit").sheet1
-
+# Kiểm tra vị thế của user
 async def check_positions(user_address):
     url = "wss://api.hyperliquid.xyz/ws"
     try:
@@ -59,6 +69,7 @@ async def check_positions(user_address):
                             position_type = "LONG" if size > 0 else "SHORT"
                             current_positions[coin] = position_type
                 
+                # Lấy dữ liệu cũ từ Google Sheets
                 try:
                     cell = sheet.find(user_address)
                     row_data = sheet.row_values(cell.row)
@@ -74,69 +85,49 @@ async def check_positions(user_address):
                 closed_positions = [(coin, old_positions[old_coins.index(coin)]) for coin in old_coins if coin not in new_coins]
                 
                 if old_coins == new_coins and old_positions == new_positions:
-                    log_message = f"🔇 Không có thay đổi vị thế cho {user_address}."
-                    print(log_message)
-                    log_data.append(log_message)
+                    print(f"🔇 Không có thay đổi vị thế cho {user_address}. Không gửi tin nhắn.")
                     return
                 
-                if old_coins != new_coins or old_positions != new_positions:
-                    message = f"📌 <b>Thay đổi vị thế ({user_address})</b>\n-----------------------------\n"
-                    for coin, position in current_positions.items():
-                        symbol = "🔹" if position == "LONG" else "🔻"
-                        status = "(🟢 Mở mới)" if coin in opened_positions else ""
-                        message += f"{symbol} <b>{coin}USDT</b> {symbol} {status}\n   - Pos: {position}\n-----------------------------\n"
-                    
-                    for coin, old_position in closed_positions:
-                        message += f"❌ <b>{coin}USDT</b> ({old_position}) đã đóng vị thế\n-----------------------------\n"
-                    
-                    send_telegram_message(user_address, message)
-
-                    # Lưu log
-                    log_data.append(message.replace("<b>", "").replace("</b>", ""))
-                    
-                    sheet.update(range_name=f"B{cell.row}:C{cell.row}", values=[[",".join(new_coins), ",".join(new_positions)]])
+                message = f"📌 <b>Thay đổi vị thế ({user_address})</b>\n-----------------------------\n"
+                for coin, position in current_positions.items():
+                    symbol = "🔹" if position == "LONG" else "🔻"
+                    status = "(🟢 Mở mới)" if coin in opened_positions else ""
+                    message += f"{symbol} <b>{coin}USDT</b> {symbol} {status}\n   - Pos: {position}\n-----------------------------\n"
                 
+                for coin, old_position in closed_positions:
+                    message += f"❌ <b>{coin}USDT</b> ({old_position}) đã đóng vị thế\n-----------------------------\n"
+
+                send_telegram_message(user_address, message)
+                
+                # Cập nhật lại Google Sheets nếu có thay đổi
+                sheet.update(range_name=f"B{cell.row}:C{cell.row}", values=[[",".join(new_coins), ",".join(new_positions)]])
                 await websocket.close()
                 return
     except Exception as e:
-        log_message = f"🚨 Lỗi với {user_address}: {e}"
-        print(log_message)
-        log_data.append(log_message)
+        print(f"🚨 Lỗi với {user_address}: {e}")
 
+# Chạy vòng lặp kiểm tra
 async def main():
     while True:
         user_data = sheet.get_all_records()
         user_addresses = [user["User_address"] for user in user_data]
         
         for user_address in user_addresses:
-            log_message = f"🔍 Kiểm tra vị thế: {user_address}"
-            print(log_message)
-            log_data.append(log_message)
+            print(f"🔍 Kiểm tra vị thế: {user_address}")
             await check_positions(user_address)
-            await asyncio.sleep(5)  
+            await asyncio.sleep(5)
         
-        log_message = "🔄 Hoàn thành vòng kiểm tra, bắt đầu lại sau 10 giây..."
-        print(log_message)
-        log_data.append(log_message)
+        print("🔄 Hoàn thành vòng kiểm tra, bắt đầu lại sau 10 giây...")
         await asyncio.sleep(10)
 
-# Route chính hiển thị logs
-@app.route("/")
-def home():
-    return "<h2>Bot Logs</h2>" + "<br>".join(log_data[-50:])  # Chỉ hiển thị 50 logs gần nhất
-
-# Chạy Flask trong một luồng riêng
-def run_flask():
-    app.run(host="0.0.0.0", port=10000)
-
-if __name__ == "__main__":
-    nest_asyncio.apply()
-    
-    # Chạy Flask server trong luồng riêng
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
-    # Chạy bot Telegram
+# Chạy song song Flask và WebSocket
+def start_async_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(main())
+
+if __name__ == "__main__":
+    from threading import Thread
+    worker_thread = Thread(target=start_async_loop)
+    worker_thread.start()
+    app.run(host="0.0.0.0", port=PORT)
